@@ -1,9 +1,13 @@
 use ::rand::prelude::*;
 use macroquad::prelude::*;
-use std::{collections::HashMap, sync::LazyLock, time::Instant};
+use std::{
+    collections::HashMap,
+    sync::LazyLock,
+    time::{Duration, Instant},
+};
 
-const N: usize = 300;
-const CELLS_ROWS: usize = 9;
+const N: usize = 3000;
+const CELLS_ROWS: usize = 100;
 const SCREEN_WIDTH: f32 = 1920.0;
 const SCREEN_HEIGHT: f32 = 1080.0;
 pub static CELL_HEIGHT: LazyLock<f32> = LazyLock::new(|| SCREEN_HEIGHT / CELLS_ROWS as f32);
@@ -24,112 +28,89 @@ impl Object {
         &self,
         id: &'a Instant,
         objects: &'a [Vec<HashMap<Instant, Self>>],
-    ) -> Option<&'a Self> {
+    ) -> &'a Self {
         let initial_cell = cell_by_pos(self.pos);
 
-        let mut delta = 0;
-        let mut left = initial_cell;
-        let mut right = initial_cell;
-        let mut up = initial_cell;
-        let mut down = initial_cell;
+        let mut directions = ivec4(
+            initial_cell.0,
+            initial_cell.0,
+            initial_cell.1,
+            initial_cell.1,
+        );
 
-        let mut visible_objects = HashMap::new();
+        let mut visible_objects = Vec::new();
 
         for (object_id, object) in &objects[initial_cell.1 as usize][initial_cell.0 as usize] {
-            visible_objects.insert(object_id, object);
+            if object_id != id {
+                visible_objects.push(object);
+            }
         }
 
-        visible_objects.remove(&id);
-
-        let mut new_added = false;
-
-        let mut last_directions = (left, right, up, down);
+        let starting_visible_objects = visible_objects.len();
 
         loop {
-            delta += 1;
-            left.0 = (left.0 - delta).max(0);
-            right.0 = (right.0 + delta).min(*CELLS_COLUMNS as isize - 1);
+            directions.x = (directions.x - 1).max(0);
+            directions.y = (directions.y + 1).min(*CELLS_COLUMNS as i32 - 1);
 
-            up.1 = (up.1 - delta).max(0);
-            down.1 = (down.1 + delta).min(CELLS_ROWS as isize - 1);
+            directions.z = (directions.z - 1).max(0);
+            directions.w = (directions.w + 1).min(CELLS_ROWS as i32 - 1);
 
-            if (left, right, up, down) == last_directions {
-                return None;
-            } else {
-                last_directions = (left, right, up, down);
-            }
-
-            for direction in [left, right, up, down] {
-                if direction != initial_cell {
-                    for (object_id, object) in &objects[direction.1 as usize][direction.0 as usize]
-                    {
-                        new_added = true;
-                        visible_objects.insert(object_id, object);
-                    }
-                }
-            }
-
-            for row in initial_cell.1..=down.1 {
-                for column in left.0..=initial_cell.0 {
+            for row in directions.z..=directions.w {
+                for column in directions.x..=directions.y {
                     if (column, row) != initial_cell {
-                        for (object_id, object) in &objects[row as usize][column as usize] {
-                            new_added = true;
-                            visible_objects.insert(object_id, object);
+                        for object in objects[row as usize][column as usize].values() {
+                            visible_objects.push(object);
                         }
                     }
                 }
             }
 
-            for row in initial_cell.1..=down.1 {
-                for column in initial_cell.0..=right.0 {
-                    if (column, row) != initial_cell {
-                        for (object_id, object) in &objects[row as usize][column as usize] {
-                            new_added = true;
-                            visible_objects.insert(object_id, object);
+            if starting_visible_objects != visible_objects.len() {
+                let first_step_closest_object = visible_objects
+                    .iter()
+                    .min_by(|a, b| {
+                        self.pos
+                            .distance(a.pos)
+                            .partial_cmp(&self.pos.distance(b.pos))
+                            .unwrap()
+                    })
+                    .unwrap();
+
+                let mut visible_objects_new = Vec::new();
+
+                let r = self.pos.distance(first_step_closest_object.pos);
+
+                let min_x = (((self.pos.x - r) / *CELL_WIDTH) as usize).max(0);
+                let max_x = (((self.pos.x + r) / *CELL_WIDTH) as usize).min(*CELLS_COLUMNS - 1);
+                let min_y = (((self.pos.y - r) / *CELL_HEIGHT) as usize).max(0);
+                let max_y = (((self.pos.y + r) / *CELL_HEIGHT) as usize).min(CELLS_ROWS - 1);
+
+                for y in min_y..=max_y {
+                    for x in min_x..=max_x {
+                        for (object_id, object) in &objects[y][x] {
+                            if object_id != id {
+                                visible_objects_new.push(object);
+                            }
                         }
                     }
                 }
-            }
 
-            for row in up.1..=initial_cell.1 {
-                for column in left.0..=initial_cell.0 {
-                    if (column, row) != initial_cell {
-                        for (object_id, object) in &objects[row as usize][column as usize] {
-                            new_added = true;
-                            visible_objects.insert(object_id, object);
-                        }
-                    }
-                }
-            }
-
-            for row in up.1..=initial_cell.1 {
-                for column in initial_cell.0..=right.0 {
-                    if (column, row) != initial_cell {
-                        for (object_id, object) in &objects[row as usize][column as usize] {
-                            new_added = true;
-                            visible_objects.insert(object_id, object);
-                        }
-                    }
-                }
-            }
-
-            if new_added {
-                return Some(visible_objects.values().min_by(|a, b| {
-                    self.pos
-                        .distance(a.pos)
-                        .partial_cmp(&self.pos.distance(b.pos))
-                        .unwrap()
-                })?);
+                return visible_objects_new
+                    .iter()
+                    .min_by(|a, b| {
+                        self.pos
+                            .distance(a.pos)
+                            .partial_cmp(&self.pos.distance(b.pos))
+                            .unwrap()
+                    })
+                    .unwrap();
             }
         }
     }
 }
 
-fn cell_by_pos(pos: Vec2) -> (isize, isize) {
-    (
-        (pos.x / *CELL_WIDTH) as isize,
-        (pos.y / *CELL_HEIGHT) as isize,
-    )
+fn cell_by_pos(pos: Vec2) -> (i32, i32) {
+    ((pos.x / *CELL_WIDTH) as i32, (pos.y / *CELL_HEIGHT) as i32)
 }
 
 #[macroquad::main("BasicShapes")]
@@ -146,6 +127,7 @@ async fn main() {
         vec![vec![HashMap::new(); *CELLS_COLUMNS]; CELLS_ROWS];
 
     let mut lines: Vec<(Vec2, Vec2)> = Vec::new();
+    let mut timer: Option<Duration> = None;
 
     for _ in 0..N {
         let pos = vec2(
@@ -163,30 +145,81 @@ async fn main() {
             lines.clear();
         }
 
+        if is_key_pressed(KeyCode::Key3) {
+            for row in &mut objects {
+                for column in row {
+                    column.clear();
+                }
+            }
+
+            for _ in 0..N {
+                let pos = vec2(
+                    rng.gen_range(0.0..SCREEN_WIDTH),
+                    rng.gen_range(0.0..SCREEN_HEIGHT),
+                );
+                let (cell_x, cell_y) = cell_by_pos(pos);
+
+                objects[cell_y as usize][cell_x as usize]
+                    .insert(Instant::now(), Object { pos, color: GREEN });
+            }
+
+            lines.clear();
+        }
+
         for (lhs, rhs) in &lines {
-            draw_line(lhs.x, lhs.y, rhs.x, rhs.y, 5.0, WHITE);
+            draw_line(lhs.x, lhs.y, rhs.x, rhs.y, 2.0, WHITE);
+        }
+
+        if is_key_pressed(KeyCode::Key1) {
+            let timestamp = Instant::now();
+
+            for row in &objects {
+                for column in row {
+                    for (object_id, object) in column {
+                        let closest = object.find_closest(object_id, &objects);
+
+                        lines.push((object.pos, closest.pos));
+                    }
+                }
+            }
+
+            timer = Some(timestamp.elapsed());
         }
 
         for row in 0..CELLS_ROWS {
             for column in 0..*CELLS_COLUMNS {
-                draw_rectangle_lines(
-                    column as f32 * *CELL_WIDTH,
-                    row as f32 * *CELL_HEIGHT,
-                    *CELL_WIDTH,
-                    *CELL_HEIGHT,
-                    5.0,
-                    GREEN,
-                );
-
-                for (object_id, object) in &objects[row][column] {
-                    if is_key_down(KeyCode::Key1) {
-                        if let Some(closest) = object.find_closest(object_id, &objects) {
-                            lines.push((object.pos, closest.pos));
-                        }
-                    }
-                    draw_circle(object.pos.x, object.pos.y, 5.0, YELLOW);
+                for object in objects[row][column].values() {
+                    draw_circle(object.pos.x, object.pos.y, 5.0, object.color);
                 }
+
+                //draw_rectangle_lines(
+                //    column as f32 * *CELL_WIDTH,
+                //    row as f32 * *CELL_HEIGHT,
+                //    *CELL_WIDTH,
+                //    *CELL_HEIGHT,
+                //    1.0,
+                //    BLUE,
+                //);
             }
+        }
+
+        if let Some(timer) = timer {
+            let text = &format!("{:?}ns", timer.as_nanos());
+            let measured = measure_text(text, None, 50, 1.0);
+            draw_rectangle(
+                SCREEN_WIDTH / 2.0 - measured.width / 2.0,
+                measured.offset_y - 5.0,
+                measured.width,
+                measured.offset_y + 10.0,
+                WHITE,
+            );
+            draw_text(
+                text,
+                SCREEN_WIDTH / 2.0 - measured.width / 2.0,
+                measured.height * 2.0,
+                50.0,
+                BLACK,
+            );
         }
 
         next_frame().await
