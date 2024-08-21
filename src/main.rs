@@ -4,20 +4,22 @@ use macroquad::prelude::*;
 use std::{
     collections::HashMap,
     ops::RangeInclusive,
+    sync::LazyLock,
     time::{Duration, Instant},
 };
 
 const OBJECT_RADIUS: f32 = 5.0;
 const COLOR_RANGE: RangeInclusive<u8> = 30..=255;
 
-const N: u64 = 100;
-const CELLS_ROWS: u64 = 85;
+const N: u64 = 3100;
+const CELLS_ROWS: u64 = 1;
 const SCREEN_WIDTH: f32 = 1920.0;
 const SCREEN_HEIGHT: f32 = 1080.0;
 
 pub static CELL_HEIGHT: f32 = SCREEN_HEIGHT / CELLS_ROWS as f32;
-pub static CELLS_COLUMNS: u64 = (CELLS_ROWS as f32 * (SCREEN_WIDTH / SCREEN_HEIGHT)) as u64;
-pub static CELL_WIDTH: f32 = SCREEN_WIDTH / CELLS_COLUMNS as f32;
+pub static CELLS_COLUMNS: LazyLock<u64> =
+    LazyLock::new(|| (CELLS_ROWS as f32 * (SCREEN_WIDTH / SCREEN_HEIGHT)).round() as u64);
+pub static CELL_WIDTH: LazyLock<f32> = LazyLock::new(|| SCREEN_WIDTH / *CELLS_COLUMNS as f32);
 
 #[derive(Clone, Debug)]
 struct Object {
@@ -42,51 +44,40 @@ impl Object {
 
         let mut visible_objects = Vec::new();
 
-        for (object_id, object) in &objects[initial_cell.1 as usize][initial_cell.0 as usize] {
-            if object_id != id {
-                visible_objects.push(object);
-            }
-        }
-
-        let starting_visible_objects = visible_objects.len();
+        let mut new_added = false;
 
         loop {
-            directions.x = directions.x.saturating_sub(1);
-            directions.y = (directions.y.saturating_add(1)).min(CELLS_COLUMNS - 1);
-
-            directions.z = directions.z.saturating_sub(1);
-            directions.w = (directions.w.saturating_add(1)).min(CELLS_ROWS - 1);
-
-            for row in directions.z..=directions.w {
-                for column in directions.x..=directions.y {
-                    if (column, row) != initial_cell {
-                        for object in objects[row as usize][column as usize].values() {
+            for y in directions.z..=directions.w {
+                for x in directions.x..=directions.y {
+                    for (object_id, object) in &objects[y as usize][x as usize] {
+                        if object_id != id {
+                            new_added = true;
                             visible_objects.push(object);
                         }
                     }
                 }
             }
 
-            let first_step_closest_object = visible_objects.iter().min_by(|a, b| {
-                self.pos
-                    .distance(a.pos)
-                    .partial_cmp(&self.pos.distance(b.pos))
-                    .unwrap()
-            });
+            if new_added {
+                let first_step_closest_object = visible_objects
+                    .iter()
+                    .min_by(|a, b| {
+                        self.pos
+                            .distance(a.pos)
+                            .partial_cmp(&self.pos.distance(b.pos))
+                            .unwrap()
+                    })
+                    .unwrap();
 
-            if starting_visible_objects > 0 && starting_visible_objects == visible_objects.len() {
-                return first_step_closest_object.unwrap();
-            }
-
-            if starting_visible_objects != visible_objects.len() {
                 let mut visible_objects_new = Vec::new();
 
-                let r = self.pos.distance(first_step_closest_object.unwrap().pos);
+                let r = self.pos.distance(first_step_closest_object.pos);
 
-                let min_x = ((self.pos.x - r) / CELL_WIDTH) as u64;
-                let max_x = (((self.pos.x + r) / CELL_WIDTH) as u64).min(CELLS_COLUMNS - 1);
-                let min_y = ((self.pos.y - r) / CELL_HEIGHT) as u64;
-                let max_y = (((self.pos.y + r) / CELL_HEIGHT) as u64).min(CELLS_ROWS - 1);
+                let min_x = ((self.pos.x - r) / *CELL_WIDTH).floor() as u64;
+                let max_x =
+                    ((((self.pos.x + r) / *CELL_WIDTH).ceil()) as u64).min(*CELLS_COLUMNS - 1);
+                let min_y = (((self.pos.y - r) / CELL_HEIGHT).floor()) as u64;
+                let max_y = (((self.pos.y + r) / CELL_HEIGHT).ceil() as u64).min(CELLS_ROWS - 1);
 
                 for y in min_y..=max_y {
                     for x in min_x..=max_x {
@@ -108,12 +99,18 @@ impl Object {
                     })
                     .unwrap();
             }
+
+            directions.x = directions.x.saturating_sub(1);
+            directions.y = (directions.y + 1).min(*CELLS_COLUMNS - 1);
+
+            directions.z = directions.z.saturating_sub(1);
+            directions.w = (directions.w + 1).min(CELLS_ROWS - 1);
         }
     }
 }
 
 fn cell_by_pos(pos: Vec2) -> (u64, u64) {
-    ((pos.x / CELL_WIDTH) as u64, (pos.y / CELL_HEIGHT) as u64)
+    ((pos.x / *CELL_WIDTH) as u64, (pos.y / CELL_HEIGHT) as u64)
 }
 
 fn reset_objects(objects: &mut [Vec<HashMap<Instant, Object>>]) {
@@ -153,12 +150,12 @@ async fn main() {
     }
 
     let mut objects: Vec<Vec<HashMap<Instant, Object>>> =
-        vec![vec![HashMap::new(); CELLS_COLUMNS as usize]; CELLS_ROWS as usize];
+        vec![vec![HashMap::new(); *CELLS_COLUMNS as usize]; CELLS_ROWS as usize];
+
+    spawn_objects(&mut objects, &mut rng);
 
     let mut lines: Vec<(Vec2, Vec2, Color)> = Vec::new();
     let mut timer: Option<Duration> = None;
-
-    spawn_objects(&mut objects, &mut rng);
 
     loop {
         if is_key_pressed(KeyCode::Key2) {
@@ -199,16 +196,16 @@ async fn main() {
             timer = Some(timestamp.elapsed());
         }
 
-        for row in 0..CELLS_ROWS {
-            for column in 0..CELLS_COLUMNS {
-                for object in objects[row as usize][column as usize].values() {
+        for (row_index, row) in objects.iter().enumerate() {
+            for (column_index, column) in row.iter().enumerate() {
+                for object in column.values() {
                     draw_circle(object.pos.x, object.pos.y, OBJECT_RADIUS, object.color);
                 }
 
                 draw_rectangle_lines(
-                    column as f32 * CELL_WIDTH,
-                    row as f32 * CELL_HEIGHT,
-                    CELL_WIDTH,
+                    column_index as f32 * *CELL_WIDTH,
+                    row_index as f32 * CELL_HEIGHT,
+                    *CELL_WIDTH,
                     CELL_HEIGHT,
                     1.0,
                     BLUE,
