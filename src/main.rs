@@ -1,24 +1,23 @@
-use ::rand::prelude::*;
+use ::rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use macroquad::prelude::*;
+
 use std::{
     collections::HashMap,
-    sync::{LazyLock, RwLock},
+    ops::RangeInclusive,
     time::{Duration, Instant},
 };
 
-const N: usize = 2;
-const CELLS_ROWS: LazyLock<RwLock<usize>> = LazyLock::new(|| RwLock::new(2));
+const OBJECT_RADIUS: f32 = 5.0;
+const COLOR_RANGE: RangeInclusive<u8> = 30..=255;
+
+const N: u64 = 100;
+const CELLS_ROWS: u64 = 85;
 const SCREEN_WIDTH: f32 = 1920.0;
 const SCREEN_HEIGHT: f32 = 1080.0;
-pub static CELL_HEIGHT: LazyLock<f32> =
-    LazyLock::new(|| SCREEN_HEIGHT / *CELLS_ROWS.read().unwrap() as f32);
 
-pub static CELLS_COLUMNS: LazyLock<RwLock<usize>> = LazyLock::new(|| {
-    RwLock::new((*CELLS_ROWS.read().unwrap() as f32 * (SCREEN_WIDTH / SCREEN_HEIGHT)) as usize)
-});
-
-pub static CELL_WIDTH: LazyLock<f32> =
-    LazyLock::new(|| SCREEN_WIDTH / *CELLS_COLUMNS.read().unwrap() as f32);
+pub static CELL_HEIGHT: f32 = SCREEN_HEIGHT / CELLS_ROWS as f32;
+pub static CELLS_COLUMNS: u64 = (CELLS_ROWS as f32 * (SCREEN_WIDTH / SCREEN_HEIGHT)) as u64;
+pub static CELL_WIDTH: f32 = SCREEN_WIDTH / CELLS_COLUMNS as f32;
 
 #[derive(Clone, Debug)]
 struct Object {
@@ -34,7 +33,7 @@ impl Object {
     ) -> &'a Self {
         let initial_cell = cell_by_pos(self.pos);
 
-        let mut directions = ivec4(
+        let mut directions = u64vec4(
             initial_cell.0,
             initial_cell.0,
             initial_cell.1,
@@ -52,11 +51,11 @@ impl Object {
         let starting_visible_objects = visible_objects.len();
 
         loop {
-            directions.x = (directions.x - 1).max(0);
-            directions.y = (directions.y + 1).min(*CELLS_COLUMNS.read().unwrap() as i32 - 1);
+            directions.x = directions.x.saturating_sub(1);
+            directions.y = (directions.y.saturating_add(1)).min(CELLS_COLUMNS - 1);
 
-            directions.z = (directions.z - 1).max(0);
-            directions.w = (directions.w + 1).min(*CELLS_ROWS.read().unwrap() as i32 - 1);
+            directions.z = directions.z.saturating_sub(1);
+            directions.w = (directions.w.saturating_add(1)).min(CELLS_ROWS - 1);
 
             for row in directions.z..=directions.w {
                 for column in directions.x..=directions.y {
@@ -84,16 +83,14 @@ impl Object {
 
                 let r = self.pos.distance(first_step_closest_object.unwrap().pos);
 
-                let min_x = (((self.pos.x - r) / *CELL_WIDTH) as usize).max(0);
-                let max_x = (((self.pos.x + r) / *CELL_WIDTH) as usize)
-                    .min(*CELLS_COLUMNS.read().unwrap() - 1);
-                let min_y = (((self.pos.y - r) / *CELL_HEIGHT) as usize).max(0);
-                let max_y = (((self.pos.y + r) / *CELL_HEIGHT) as usize)
-                    .min(*CELLS_ROWS.read().unwrap() - 1);
+                let min_x = ((self.pos.x - r) / CELL_WIDTH) as u64;
+                let max_x = (((self.pos.x + r) / CELL_WIDTH) as u64).min(CELLS_COLUMNS - 1);
+                let min_y = ((self.pos.y - r) / CELL_HEIGHT) as u64;
+                let max_y = (((self.pos.y + r) / CELL_HEIGHT) as u64).min(CELLS_ROWS - 1);
 
                 for y in min_y..=max_y {
                     for x in min_x..=max_x {
-                        for (object_id, object) in &objects[y][x] {
+                        for (object_id, object) in &objects[y as usize][x as usize] {
                             if object_id != id {
                                 visible_objects_new.push(object);
                             }
@@ -115,17 +112,19 @@ impl Object {
     }
 }
 
-fn cell_by_pos(pos: Vec2) -> (i32, i32) {
-    ((pos.x / *CELL_WIDTH) as i32, (pos.y / *CELL_HEIGHT) as i32)
+fn cell_by_pos(pos: Vec2) -> (u64, u64) {
+    ((pos.x / CELL_WIDTH) as u64, (pos.y / CELL_HEIGHT) as u64)
 }
 
-fn reset_objects(objects: &mut [Vec<HashMap<Instant, Object>>], rng: &mut StdRng) {
+fn reset_objects(objects: &mut [Vec<HashMap<Instant, Object>>]) {
     for row in &mut *objects {
         for column in row {
             column.clear();
         }
     }
+}
 
+fn spawn_objects(objects: &mut [Vec<HashMap<Instant, Object>>], rng: &mut StdRng) {
     for _ in 0..N {
         let pos = vec2(
             rng.gen_range(0.0..SCREEN_WIDTH),
@@ -133,8 +132,13 @@ fn reset_objects(objects: &mut [Vec<HashMap<Instant, Object>>], rng: &mut StdRng
         );
         let (cell_x, cell_y) = cell_by_pos(pos);
 
-        objects[cell_y as usize][cell_x as usize]
-            .insert(Instant::now(), Object { pos, color: GREEN });
+        let color = Color::from_rgba(
+            rng.gen_range(COLOR_RANGE),
+            rng.gen_range(COLOR_RANGE),
+            rng.gen_range(COLOR_RANGE),
+            255,
+        );
+        objects[cell_y as usize][cell_x as usize].insert(Instant::now(), Object { pos, color });
     }
 }
 
@@ -149,21 +153,12 @@ async fn main() {
     }
 
     let mut objects: Vec<Vec<HashMap<Instant, Object>>> =
-        vec![vec![HashMap::new(); *CELLS_COLUMNS.read().unwrap()]; *CELLS_ROWS.read().unwrap()];
+        vec![vec![HashMap::new(); CELLS_COLUMNS as usize]; CELLS_ROWS as usize];
 
-    let mut lines: Vec<(Vec2, Vec2)> = Vec::new();
+    let mut lines: Vec<(Vec2, Vec2, Color)> = Vec::new();
     let mut timer: Option<Duration> = None;
 
-    for _ in 0..N {
-        let pos = vec2(
-            rng.gen_range(0.0..SCREEN_WIDTH),
-            rng.gen_range(0.0..SCREEN_HEIGHT),
-        );
-        let (cell_x, cell_y) = cell_by_pos(pos);
-
-        objects[cell_y as usize][cell_x as usize]
-            .insert(Instant::now(), Object { pos, color: GREEN });
-    }
+    spawn_objects(&mut objects, &mut rng);
 
     loop {
         if is_key_pressed(KeyCode::Key2) {
@@ -171,13 +166,21 @@ async fn main() {
         }
 
         if is_key_pressed(KeyCode::Key3) {
-            reset_objects(&mut objects, &mut rng);
+            reset_objects(&mut objects);
+            spawn_objects(&mut objects, &mut rng);
 
             lines.clear();
         }
 
-        for (lhs, rhs) in &lines {
-            draw_line(lhs.x, lhs.y, rhs.x, rhs.y, 2.0, WHITE);
+        for (lhs_point, rhs_point, color) in &lines {
+            draw_line(
+                lhs_point.x,
+                lhs_point.y,
+                rhs_point.x,
+                rhs_point.y,
+                2.0,
+                *color,
+            );
         }
 
         if is_key_pressed(KeyCode::Key1) {
@@ -188,7 +191,7 @@ async fn main() {
                     for (object_id, object) in column {
                         let closest = object.find_closest(object_id, &objects);
 
-                        lines.push((object.pos, closest.pos));
+                        lines.push((object.pos, closest.pos, object.color));
                     }
                 }
             }
@@ -196,17 +199,17 @@ async fn main() {
             timer = Some(timestamp.elapsed());
         }
 
-        for row in 0..*CELLS_ROWS.read().unwrap() {
-            for column in 0..*CELLS_COLUMNS.read().unwrap() {
-                for object in objects[row][column].values() {
-                    draw_circle(object.pos.x, object.pos.y, 5.0, object.color);
+        for row in 0..CELLS_ROWS {
+            for column in 0..CELLS_COLUMNS {
+                for object in objects[row as usize][column as usize].values() {
+                    draw_circle(object.pos.x, object.pos.y, OBJECT_RADIUS, object.color);
                 }
 
                 draw_rectangle_lines(
-                    column as f32 * *CELL_WIDTH,
-                    row as f32 * *CELL_HEIGHT,
-                    *CELL_WIDTH,
-                    *CELL_HEIGHT,
+                    column as f32 * CELL_WIDTH,
+                    row as f32 * CELL_HEIGHT,
+                    CELL_WIDTH,
+                    CELL_HEIGHT,
                     1.0,
                     BLUE,
                 );
