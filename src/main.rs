@@ -8,11 +8,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-const OBJECT_RADIUS: f32 = 5.0;
+const OBJECT_RADIUS: f32 = 1.0;
 const COLOR_RANGE: RangeInclusive<u8> = 30..=255;
 
-const N: u64 = 3100;
-const CELLS_ROWS: u64 = 1;
+const N: u64 = 32000;
+const CELLS_ROWS: u64 = 100;
 const SCREEN_WIDTH: f32 = 1920.0;
 const SCREEN_HEIGHT: f32 = 1080.0;
 
@@ -71,19 +71,26 @@ impl Object {
 
                 let mut visible_objects_new = Vec::new();
 
+                visible_objects_new.push(*first_step_closest_object);
+
                 let r = self.pos.distance(first_step_closest_object.pos);
 
                 let min_x = ((self.pos.x - r) / *CELL_WIDTH).floor() as u64;
                 let max_x =
                     ((((self.pos.x + r) / *CELL_WIDTH).ceil()) as u64).min(*CELLS_COLUMNS - 1);
+
                 let min_y = (((self.pos.y - r) / CELL_HEIGHT).floor()) as u64;
                 let max_y = (((self.pos.y + r) / CELL_HEIGHT).ceil() as u64).min(CELLS_ROWS - 1);
 
                 for y in min_y..=max_y {
                     for x in min_x..=max_x {
-                        for (object_id, object) in &objects[y as usize][x as usize] {
-                            if object_id != id {
-                                visible_objects_new.push(object);
+                        if !(directions.x..=directions.y).contains(&x)
+                            && !(directions.z..=directions.w).contains(&y)
+                        {
+                            for (object_id, object) in &objects[y as usize][x as usize] {
+                                if object_id != id {
+                                    visible_objects_new.push(object);
+                                }
                             }
                         }
                     }
@@ -214,7 +221,7 @@ async fn main() {
         }
 
         if let Some(timer) = timer {
-            let text = &format!("{:?}ns", timer.as_nanos());
+            let text = &format!("{}s", timer.as_secs_f64());
             let measured = measure_text(text, None, 50, 1.0);
 
             draw_rectangle(
