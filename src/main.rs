@@ -6,8 +6,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-const N: usize = 5000;
-const CELLS_ROWS: LazyLock<RwLock<usize>> = LazyLock::new(|| RwLock::new(3));
+const N: usize = 2;
+const CELLS_ROWS: LazyLock<RwLock<usize>> = LazyLock::new(|| RwLock::new(2));
 const SCREEN_WIDTH: f32 = 1920.0;
 const SCREEN_HEIGHT: f32 = 1080.0;
 pub static CELL_HEIGHT: LazyLock<f32> =
@@ -75,11 +75,11 @@ impl Object {
                     .unwrap()
             });
 
-            if starting_visible_objects == visible_objects.len() {
-                if starting_visible_objects > 0 {
-                    return first_step_closest_object.unwrap();
-                }
-            } else {
+            if starting_visible_objects > 0 && starting_visible_objects == visible_objects.len() {
+                return first_step_closest_object.unwrap();
+            }
+
+            if starting_visible_objects != visible_objects.len() {
                 let mut visible_objects_new = Vec::new();
 
                 let r = self.pos.distance(first_step_closest_object.unwrap().pos);
