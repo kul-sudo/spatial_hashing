@@ -8,11 +8,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-const OBJECT_RADIUS: f32 = 1.0;
+const OBJECT_RADIUS: f32 = 5.0;
 const COLOR_RANGE: RangeInclusive<u8> = 30..=255;
 
-const N: u64 = 32000;
-const CELLS_ROWS: u64 = 100;
+const N: u64 = 1000;
+const CELLS_ROWS: u64 = 85;
 const SCREEN_WIDTH: f32 = 1920.0;
 const SCREEN_HEIGHT: f32 = 1080.0;
 
@@ -35,84 +35,113 @@ impl Object {
     ) -> &'a Self {
         let initial_cell = cell_by_pos(self.pos);
 
-        let mut directions = u64vec4(
-            initial_cell.0,
-            initial_cell.0,
-            initial_cell.1,
-            initial_cell.1,
-        );
+        let cell_pos = u64vec2(initial_cell.0, initial_cell.1);
+
+        let mut layer = 0;
 
         let mut visible_objects = Vec::new();
 
-        let mut new_added = false;
-
         loop {
-            for y in directions.z..=directions.w {
-                for x in directions.x..=directions.y {
-                    for (object_id, object) in &objects[y as usize][x as usize] {
+            // Top x
+            if cell_pos.y >= layer {
+                for x in
+                    cell_pos.x.saturating_sub(layer)..=(cell_pos.x + layer).min(*CELLS_COLUMNS - 1)
+                {
+                    for (object_id, object) in &objects[(cell_pos.y - layer) as usize][x as usize] {
                         if object_id != id {
-                            new_added = true;
                             visible_objects.push(object);
                         }
                     }
                 }
             }
 
-            if new_added {
-                let first_step_closest_object = visible_objects
-                    .iter()
-                    .min_by(|a, b| {
-                        self.pos
-                            .distance(a.pos)
-                            .partial_cmp(&self.pos.distance(b.pos))
-                            .unwrap()
-                    })
-                    .unwrap();
-
-                let mut visible_objects_new = Vec::new();
-
-                visible_objects_new.push(*first_step_closest_object);
-
-                let r = self.pos.distance(first_step_closest_object.pos);
-
-                let min_x = ((self.pos.x - r) / *CELL_WIDTH).floor() as u64;
-                let max_x =
-                    ((((self.pos.x + r) / *CELL_WIDTH).ceil()) as u64).min(*CELLS_COLUMNS - 1);
-
-                let min_y = (((self.pos.y - r) / CELL_HEIGHT).floor()) as u64;
-                let max_y = (((self.pos.y + r) / CELL_HEIGHT).ceil() as u64).min(CELLS_ROWS - 1);
-
-                for y in min_y..=max_y {
-                    for x in min_x..=max_x {
-                        if !(directions.x..=directions.y).contains(&x)
-                            && !(directions.z..=directions.w).contains(&y)
-                        {
-                            for (object_id, object) in &objects[y as usize][x as usize] {
-                                if object_id != id {
-                                    visible_objects_new.push(object);
-                                }
-                            }
-                        }
+            // Bottom x
+            if layer > 0 && cell_pos.y + layer <= CELLS_ROWS - 1 {
+                for x in
+                    cell_pos.x.saturating_sub(layer)..=(cell_pos.x + layer).min(*CELLS_COLUMNS - 1)
+                {
+                    for object in objects[(cell_pos.y + layer) as usize][x as usize].values() {
+                        visible_objects.push(object);
                     }
                 }
-
-                return visible_objects_new
-                    .iter()
-                    .min_by(|a, b| {
-                        self.pos
-                            .distance(a.pos)
-                            .partial_cmp(&self.pos.distance(b.pos))
-                            .unwrap()
-                    })
-                    .unwrap();
             }
 
-            directions.x = directions.x.saturating_sub(1);
-            directions.y = (directions.y + 1).min(*CELLS_COLUMNS - 1);
+            // Left y
+            if layer > 0 && cell_pos.x >= layer {
+                for y in cell_pos.y.saturating_sub(layer - 1)
+                    ..=(cell_pos.y + (layer - 1)).min(CELLS_ROWS - 1)
+                {
+                    for object in objects[y as usize][(cell_pos.x - layer) as usize].values() {
+                        visible_objects.push(object);
+                    }
+                }
+            }
 
-            directions.z = directions.z.saturating_sub(1);
-            directions.w = (directions.w + 1).min(CELLS_ROWS - 1);
+            // Right y
+            if layer > 0 && cell_pos.x + layer <= *CELLS_COLUMNS - 1 {
+                for y in cell_pos.y.saturating_sub(layer - 1)
+                    ..=(cell_pos.y + (layer - 1)).min(CELLS_ROWS - 1)
+                {
+                    for object in objects[y as usize][(cell_pos.x + layer) as usize].values() {
+                        visible_objects.push(object);
+                    }
+                }
+            }
+
+            if !visible_objects.is_empty() {
+                break;
+            }
+
+            layer += 1;
         }
+
+        let first_step_closest_object = visible_objects
+            .iter()
+            .min_by(|a, b| {
+                self.pos
+                    .distance(a.pos)
+                    .partial_cmp(&self.pos.distance(b.pos))
+                    .unwrap()
+            })
+            .unwrap();
+
+        let mut visible_objects_new = Vec::new();
+
+        visible_objects_new.push(*first_step_closest_object);
+
+        let r = self.pos.distance(first_step_closest_object.pos);
+
+        let min_x = ((self.pos.x - r) / *CELL_WIDTH).max(0.0) as u64;
+        let max_x = (((self.pos.x + r) / *CELL_WIDTH) as u64).min(*CELLS_COLUMNS - 1);
+
+        let min_y = ((self.pos.y - r) / CELL_HEIGHT).max(0.0) as u64;
+        let max_y = (((self.pos.y + r) / CELL_HEIGHT) as u64).min(CELLS_ROWS - 1);
+
+        for y in min_y..=max_y {
+            for x in min_x..=max_x {
+                if !(initial_cell.0.saturating_sub(layer)
+                    ..=(initial_cell.0 + layer).min(*CELLS_COLUMNS - 1))
+                    .contains(&x)
+                    && !(initial_cell.1.saturating_sub(layer)
+                        ..=(initial_cell.1 + layer).min(CELLS_ROWS - 1))
+                        .contains(&y)
+                {
+                    for object in objects[y as usize][x as usize].values() {
+                        visible_objects_new.push(object);
+                    }
+                }
+            }
+        }
+
+        return visible_objects_new
+            .iter()
+            .min_by(|a, b| {
+                self.pos
+                    .distance(a.pos)
+                    .partial_cmp(&self.pos.distance(b.pos))
+                    .unwrap()
+            })
+            .unwrap();
     }
 }
 
@@ -146,7 +175,7 @@ fn spawn_objects(objects: &mut [Vec<HashMap<Instant, Object>>], rng: &mut StdRng
     }
 }
 
-#[macroquad::main("BasicShapes")]
+#[macroquad::main("spatial hashing")]
 async fn main() {
     let mut rng = StdRng::from_rng(&mut thread_rng()).unwrap();
     // A workaround for Linux
